@@ -1,0 +1,114 @@
+#include <Wire.h>
+#include "I2Cdev.h"
+#include "MPU6050.h"
+
+MPU6050 mpu1(0x68);  // First MPU6050 (AD0 LOW)
+MPU6050 mpu2(0x69);  // Second MPU6050 (AD0 HIGH)
+
+// Raw angles
+float roll1, pitch1;
+float roll2, pitch2;
+
+// Calibration offsets
+float roll1_offset = 0, pitch1_offset = 0;
+float roll2_offset = 0, pitch2_offset = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+
+  mpu1.initialize();
+  mpu2.initialize();
+
+  if (!mpu1.testConnection() || !mpu2.testConnection()) {
+    Serial.println("MPU6050 connection failed!");
+    while (1);
+  }
+
+  Serial.println("Place arm straight (0° flexion, should read 180°) and press any key to calibrate...");
+  while (!Serial.available());  // wait for user
+  Serial.read();                // clear key
+
+  calibrateSensors();
+  Serial.println("Calibration done. Starting measurement...");
+}
+
+void loop() {
+  unsigned long currentTime = millis();  // Time stamp in ms
+
+  // Read both sensors (roll, pitch)
+  roll1 = getRoll(mpu1) - roll1_offset;
+  pitch1 = getPitch(mpu1) - pitch1_offset;
+
+  roll2 = getRoll(mpu2) - roll2_offset;
+  pitch2 = getPitch(mpu2) - pitch2_offset;
+
+  // Relative difference
+  float dRoll = roll2 - roll1;
+  float dPitch = pitch2 - pitch1;
+
+  // Combined elbow flexion
+  float elbowFlexion = sqrt(dRoll * dRoll + dPitch * dPitch);
+
+  // ---- Invert so 0° flexion -> 180° output ----
+  elbowFlexion = constrain(180.0 - elbowFlexion, 0, 180);
+
+  // ---------- Serial Output ----------
+  Serial.print("Time(ms): ");
+  Serial.print(currentTime);
+
+  Serial.print(" || Sensor1 -> Roll: ");
+  Serial.print(roll1, 2);
+  Serial.print(" Pitch: ");
+  Serial.print(pitch1, 2);
+
+  Serial.print(" || Sensor2 -> Roll: ");
+  Serial.print(roll2, 2);
+  Serial.print(" Pitch: ");
+  Serial.print(pitch2, 2);
+
+  Serial.print(" || Elbow Flexion: ");
+  Serial.print(elbowFlexion, 2);
+  Serial.println(" deg");
+
+  delay(50);
+}
+
+// ---------- Calibration Function ----------
+void calibrateSensors() {
+  const int samples = 100;
+  float r1=0, p1=0, r2=0, p2=0;
+
+  for (int i = 0; i < samples; i++) {
+    r1 += getRoll(mpu1);
+    p1 += getPitch(mpu1);
+
+    r2 += getRoll(mpu2);
+    p2 += getPitch(mpu2);
+
+    delay(10);
+  }
+
+  // Average offsets
+  roll1_offset = r1 / samples;
+  pitch1_offset = p1 / samples;
+
+  roll2_offset = r2 / samples;
+  pitch2_offset = p2 / samples;
+}
+
+// ---------- Helper functions (with NaN safety) ----------
+float getRoll(MPU6050 &mpu) {
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  if (az == 0) az = 1;  // prevent divide by zero
+  return atan2((float)ay, (float)az) * 180.0 / PI;
+}
+
+float getPitch(MPU6050 &mpu) {
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+  float denom = sqrt((long)ay * ay + (long)az * az);
+  if (denom == 0) return 0;  // prevent NaN
+  return atan2(-(float)ax, denom) * 180.0 / PI;
+}
